@@ -1,14 +1,16 @@
+name: workbench-redis
+
 services:
-  redis:
+  dev-redis:
     build:
-      context: .
-    image: dev-redis:local            # built from Dockerfile
+      context: ./server
+    image: workbench-redis:server
     container_name: dev-redis
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # only expose on localhost
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # bind to localhost only
     volumes:
       - redisdata:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./server/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -16,9 +18,33 @@ services:
       timeout: 2s
       retries: 20
     restart: unless-stopped
-    # If you want app containers to reach this via host mapping:
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
+
+  redis-ui:
+    image: ghcr.io/joeferner/redis-commander:latest
+    container_name: workbench-redis-ui
+    ports:
+      - "127.0.0.1:${UI_PORT:-8081}:8081"      # bind to localhost only
+    environment:
+      # Connect to Redis via the internal compose network (service name)
+      REDIS_HOSTS: "${REDIS_HOSTS:-local:dev-redis:6379}"
+
+      # Enable UI Basic Auth by setting both in .env (leave empty to disable):
+      HTTP_USER: "${HTTP_USER:-}"
+      HTTP_PASSWORD: "${HTTP_PASSWORD:-}"
+
+      # If Redis auth is enabled, prefer the 5-field form:
+      # name:host:port[:db][:password]
+      # Example using the same password as in server/redis.conf:
+      # REDIS_HOSTS: "local:dev-redis:6379:0:${REDIS_PASSWORD}"
+    depends_on:
+      dev-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
 
 volumes:
   redisdata:

@@ -1,87 +1,109 @@
-# Dev Redis — Single, Reusable Redis Container for All Local Projects
+# Workbench Redis — Single, Reusable Redis + Web UI (One-Compose Setup)
 
-A production-grade **developer Redis** you can run once on your machine and reuse across many Laravel (or any) projects — **without touching project code** (only tweak each project's `.env`).
+A production-grade **developer Redis** you can spin up once and reuse across many projects — paired with a **minimal admin UI** (redis-commander). Everything runs from a **single root `docker-compose.yml`**, with clean localhost bindings and sane defaults.
 
-This repo gives you:
-
-- A minimal, reproducible Redis image (`redis:7-alpine`).
-- Sensible defaults for **persistence** (AOF), **memory policy** (LRU), and **local-only exposure** (bind to `127.0.0.1`).
-- A clean **Docker Compose** workflow: `build`, `up -d`, `down`.
-- Clear guidelines to connect **containerized** and **host-native** apps using either `172.17.0.1` or `host.docker.internal`.
-- Isolation recipes (`REDIS_DB`, `REDIS_PREFIX`, Horizon prefixes) so multiple projects never clash.
-
-> Goal: Spin up **one** Redis for all your local apps, keep state across restarts, and avoid duplicating Redis services in every `docker-compose.yml`.
+> Goal: Clone → `docker compose build` → `docker compose up -d` → manage at `http://localhost:8081` → point any app to `127.0.0.1:6379` (or host bridge from other containers) — **no per-project compose duplication**.
 
 ---
 
 ## Table of Contents
-
-1. [When to Use This](#when-to-use-this)
-2. [Architecture](#architecture)
-3. [Folder Structure](#folder-structure)
-4. [Configuration Files](#configuration-files)
-   - [`docker-compose.yml`](#docker-composeyml)
-   - [`Dockerfile`](#dockerfile)
-   - [`redis.conf`](#redisconf)
-   - [`.env`](#env)
-   - [`.gitignore`](#gitignore)
-5. [Setup &amp; Run](#setup--run)
-6. [Usage From Your Apps](#usage-from-your-apps)
-   - [Containerized apps → host Redis](#containerized-apps--host-redis)
-   - [Host-native apps → host Redis](#host-native-apps--host-redis)
-   - [Laravel .env isolation](#laravel-env-isolation)
-7. [Operational Commands (Full List)](#step-7--operational-commands-full-list)
-8. [Laravel `.env` Examples (Copy-Paste)](#step-8--laravel-env-examples-copy-paste)
-9. [Security Notes](#security-notes)
-10. [Persistence &amp; Data Management](#persistence--data-management)
+1. [Why This Exists](#why-this-exists)
+2. [What You Get](#what-you-get)
+3. [Repository Layout](#repository-layout)
+4. [Quick Start](#quick-start)
+5. [Configuration Files](#configuration-files)
+   - [`docker-compose.yml` (root)](#docker-composeyml-root)
+   - [`.env` (root)](#env-root)
+   - [`server/Dockerfile`](#serverdockerfile)
+   - [`server/redis.conf`](#serverredisconf)
+   - [`.gitignore` (root)](#gitignore-root)
+6. [Operational Commands (Full List)](#operational-commands-full-list)
+7. [Using the Web UI](#using-the-web-ui)
+8. [Integrating With Your Apps](#integrating-with-your-apps)
+   - [Host-native apps](#host-native-apps)
+   - [Other containers (outside this compose)](#other-containers-outside-this-compose)
+   - [Laravel `.env` Examples (Copy-Paste)](#laravel-env-examples-copy-paste)
+9. [Security & Hardening](#security--hardening)
+10. [Persistence & Backups](#persistence--backups)
 11. [Troubleshooting](#troubleshooting)
 12. [FAQ](#faq)
 13. [License](#license)
 
 ---
 
-## When to Use This
+## Why This Exists
+- You have many projects that need Redis (queues, cache, rate limits) and you prefer **one reusable local service**.
+- You want **durable queues** (AOF on), **bounded memory** (LRU), and **local-only exposure** (safe by default).
+- You do **not** want to duplicate a Redis service in every repo’s compose.
+- You want a **simple Web UI** to inspect keys and values on demand.
 
-- You have **many projects** that need Redis (queues, cache, rate limits) and you prefer a **single** local Redis instance.
-- You don't want to add a Redis service to each project's compose file.
-- You want **durable local queues** (AOF on) and **sane memory** limits.
-- You want to connect **both containerized** and **native** apps with zero project code changes (only `.env`).
+## What You Get
+- **Single root compose** running:
+  - `dev-redis` → Redis 7 (alpine), with AOF, memory policy, healthcheck
+  - `redis-ui` → redis-commander (web UI) bound to localhost
+- **Local-only port mapping** (127.0.0.1) for both services
+- **Named volume** for persistence (`redisdata`)
+- Clean **internal networking**: UI talks to Redis by service name (`dev-redis:6379`)
+- Drop-in integration patterns for host-native apps & other containers
 
-## Architecture
-
-- **One** Redis container, bound to `127.0.0.1:6379`. External clients must be on the same host.
-- Data persisted in a Docker **named volume** (`redisdata`).
-- **AOF** enabled for durability; optional snapshotting enabled.
-- **allkeys-lru** policy to avoid OOM; tune as needed.
-- Healthcheck via `redis-cli ping`.
-
-## Folder Structure
-
+## Repository Layout
 ```
 .
-├─ docker-compose.yml
-├─ Dockerfile
-├─ redis.conf
-├─ .env
-└─ .gitignore
+├─ docker-compose.yml      # single compose (server + ui)
+├─ .env                    # shared env (ports, UI target, optional auth)
+├─ .gitignore
+├─ README.md               # this file
+└─ server/
+   ├─ Dockerfile           # FROM redis:7-alpine
+   └─ redis.conf           # AOF, memory policy, optional requirepass
 ```
+
+---
+
+## Quick Start
+```bash
+# 1) Clone & enter
+# HTTPS
+git clone https://github.com/EraysWorkbench/workbench-redis.git
+# SSH
+# git@github.com:EraysWorkbench/workbench-redis.git
+cd workbench-redis
+
+# 2) Build once
+docker compose build
+
+# 3) Run in background
+docker compose up -d
+
+# 4) Verify
+docker compose ps
+
+# 5) Use it
+# Redis: 127.0.0.1:6379
+# UI:    http://localhost:8081
+```
+
+> Tip (Linux): if another containerized project must connect to this Redis, use `172.17.0.1:6379` (Docker bridge) or `host.docker.internal:6379` (if available) as the host in that project’s `.env`.
+
+---
 
 ## Configuration Files
 
-### `docker-compose.yml`
-
+### `docker-compose.yml` (root)
 ```yaml
+name: workbench-redis
+
 services:
-  redis:
+  dev-redis:
     build:
-      context: .
-    image: dev-redis:local            # built from Dockerfile
+      context: ./server
+    image: workbench-redis:server
     container_name: dev-redis
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # only expose on localhost
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # bind to localhost only
     volumes:
       - redisdata:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./server/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -90,20 +112,61 @@ services:
       retries: 20
     restart: unless-stopped
 
+  redis-ui:
+    image: ghcr.io/joeferner/redis-commander:latest
+    container_name: workbench-redis-ui
+    ports:
+      - "127.0.0.1:${UI_PORT:-8081}:8081"      # bind to localhost only
+    environment:
+      # Connect to Redis via the internal compose network (service name)
+      REDIS_HOSTS: "${REDIS_HOSTS:-local:dev-redis:6379}"
+
+      # Enable UI Basic Auth by setting both in .env (leave empty to disable):
+      HTTP_USER: "${HTTP_USER:-}"
+      HTTP_PASSWORD: "${HTTP_PASSWORD:-}"
+
+      # If Redis auth is enabled, prefer the 5-field form:
+      # name:host:port[:db][:password]
+      # Example using the same password as in server/redis.conf:
+      # REDIS_HOSTS: "local:dev-redis:6379:0:${REDIS_PASSWORD}"
+    depends_on:
+      dev-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
 volumes:
   redisdata:
 ```
 
-### `Dockerfile`
+### `.env` (root)
+```ini
+# Host port mappings
+REDIS_PORT=6379
+UI_PORT=8081
 
+# UI connects to Redis over compose internal network (service name)
+REDIS_HOSTS=local:dev-redis:6379
+
+# If you enable `requirepass` in server/redis.conf, set and keep this in sync:
+# REDIS_PASSWORD=change_me
+
+# Optional HTTP Basic Auth for the UI (redis-commander)
+# Uncomment both to enable:
+# HTTP_USER=admin
+# HTTP_PASSWORD=change_me
+```
+
+### `server/Dockerfile`
 ```dockerfile
 FROM redis:7-alpine
 ```
 
-> Tiny, reproducible base. Compose handles ports and healthcheck.
-
-### `redis.conf`
-
+### `server/redis.conf`
 ```conf
 # --- Security / binding ---
 protected-mode yes
@@ -117,6 +180,7 @@ port 6379
 # --- Persistence ---
 appendonly yes
 appendfilename "appendonly.aof"
+# safer than 'no', faster than 'always'
 appendfsync everysec
 
 # Optional RDB snapshots (dev-friendly defaults)
@@ -132,117 +196,86 @@ maxmemory-policy allkeys-lru
 loglevel notice
 ```
 
-### `.env`
-
-```ini
-# Compose variables
-REDIS_PORT=6379
-
-# If you enable requirepass in redis.conf, keep the value in sync
-# REDIS_PASSWORD=change_me
-```
-
-### `.gitignore`
-
+### `.gitignore` (root)
 ```gitignore
+# Environment file
+.env
+
+# Redis persistence artifacts (safety)
 *.rdb
 *.aof
 *.aof.*
 dump.rdb
-.env
 ```
-
----
-
-## Setup & Run
-
-```bash
-# 1) Build image
-docker compose build
-
-# 2) Start in background
-docker compose up -d
-
-# 3) Check health
-docker compose ps
-docker logs -f dev-redis
-
-# 4) Smoke test
-# From host:
-redis-cli -h 127.0.0.1 ping   # => PONG
-
-# Or from inside the container:
-docker exec -it dev-redis redis-cli ping
-
-# 5) Stop & remove container (data persists)
-docker compose down
-
-# 6) Nuke everything including data (careful!)
-# docker compose down -v
-```
-
----
-
-## Usage From Your Apps
-
-### Containerized apps → host Redis
-
-Your app runs **inside Docker**, but Redis is hosted on the **same machine** (this container). From inside containers, `127.0.0.1` points to *their own* namespace — not your host. Use one of:
-
-1) **Bridge IP** (Linux Docker default): `172.17.0.1`Find it: `ip route | grep docker0` → look for `via 172.17.0.1`.
-2) **host.docker.internal** (cleaner DNS):
-   On Linux this may need enabling host gateway in Docker daemon. If you prefer zero daemon tweaks, just use `172.17.0.1`.
-
-### Host-native apps → host Redis
-
-If the app runs directly on your machine (not in Docker), connect to `127.0.0.1:6379`.
-
-### Laravel .env isolation
-
-Always isolate per-project to avoid key clashes:
-
-- Use **distinct** `REDIS_DB` (e.g., `0..15`).
-- Use **distinct** `REDIS_PREFIX`.
-- If using Horizon, set **distinct** `HORIZON_PREFIX`.
 
 ---
 
 ## Operational Commands (Full List)
-
-The exact commands you'll use day-to-day:
-
 ```bash
-# Build once (image name: dev-redis:local)
+# Build images
 docker compose build
 
-# Start in background
+# Start both services in background
 docker compose up -d
 
-# Health and logs
-docker compose ps
+# Tail logs
 docker logs -f dev-redis
+# (UI)
+docker logs -f workbench-redis-ui
 
+# Health & status
+docker compose ps
 docker exec -it dev-redis redis-cli ping
-# optional: inspect info
-docker exec -it dev-redis redis-cli info server | head -n 20
 
+# Inspect Redis data directory inside the container
 docker exec -it dev-redis sh -lc 'ls -lh /data'
 
-# Stop & remove container (volume persists)
+# Stop and remove containers (volume persists)
 docker compose down
 
 # Remove everything including data (IRREVERSIBLE!)
 # docker compose down -v
 ```
 
-> Tip: Data is stored in the named volume `redisdata`. Use `docker volume inspect redisdata` to find its mountpoint.
+---
+
+## Using the Web UI
+- Open **`http://localhost:8081`**.
+- By default it connects to `dev-redis:6379` over the internal compose network.
+- To protect the UI with HTTP Basic Auth, set in `.env`:
+  ```ini
+  HTTP_USER=admin
+  HTTP_PASSWORD=change_me
+  ```
+  Then `docker compose up -d --force-recreate`.
+- To target a different DB or a password-protected Redis, use the 5-field form:
+  ```ini
+  # name:host:port[:db][:password]
+  REDIS_HOSTS=local:dev-redis:6379:1:change_me
+  ```
 
 ---
 
-## Laravel `.env` Examples (Copy-Paste)
+## Integrating With Your Apps
 
-### A) Containerized Laravel → host Redis via bridge IP (quickest)
+### Host-native apps
+Point them to the localhost mapping:
+```ini
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+```
 
+### Other containers (outside this compose)
+Containers in **other** compose projects cannot resolve `dev-redis` by name. Use your host bridge:
+- **Linux (bridge)**: `REDIS_HOST=172.17.0.1`
+- **Generic** (if available): `REDIS_HOST=host.docker.internal`
+- Port stays `6379` unless you changed it in this repo’s `.env`.
+
+> Find your Docker bridge IP with: `ip route | grep docker0` (look for `via 172.17.0.1`).
+
+### Laravel `.env` Examples (Copy-Paste)
+
+**A) Containerized Laravel → host Redis via bridge IP (quickest)**
 ```dotenv
 QUEUE_CONNECTION=redis
 REDIS_HOST=172.17.0.1
@@ -255,10 +288,7 @@ REDIS_PREFIX=myapp_
 HORIZON_PREFIX=myapp_horizon:
 ```
 
-### B) Containerized Laravel → host Redis via host.docker.internal (clean DNS)
-
-> Requires host-gateway support in Docker daemon on Linux; otherwise prefer A.
-
+**B) Containerized Laravel → host Redis via host.docker.internal (clean DNS)**
 ```dotenv
 QUEUE_CONNECTION=redis
 REDIS_HOST=host.docker.internal
@@ -270,8 +300,7 @@ REDIS_PREFIX=myapp_
 HORIZON_PREFIX=myapp_horizon:
 ```
 
-### C) Host-native Laravel → host Redis
-
+**C) Host-native Laravel → host Redis**
 ```dotenv
 QUEUE_CONNECTION=redis
 REDIS_HOST=127.0.0.1
@@ -283,45 +312,55 @@ REDIS_PREFIX=myapp_
 HORIZON_PREFIX=myapp_horizon:
 ```
 
-> Horizon users: also ensure `config/horizon.php` uses the desired connection and prefix.
+> If Redis auth is enabled here, remember to configure your app’s Redis client with the same password.
 
 ---
 
-## Security Notes
+## Security & Hardening
+- **Local-only bindings**: Both `6379` and `8081` are mapped to `127.0.0.1`.
+- **UI Basic Auth**: enable via `.env` (`HTTP_USER` / `HTTP_PASSWORD`).
+- **Redis AUTH**: uncomment `requirepass` in `server/redis.conf`, set `.env` → `REDIS_PASSWORD`, and update `REDIS_HOSTS` to the 5-field form.
+- Prefer `FLUSHDB` over `FLUSHALL` (the latter affects all DBs).
+- If you change port mappings, keep your clients in sync.
 
-- This compose maps `6379` only to `127.0.0.1`. Nothing is exposed to your LAN.
-- If you still want auth, uncomment `requirepass` in `redis.conf` and set a strong secret. Update client `.env` with `REDIS_PASSWORD` (driver-specific) if your client library uses it.
-- Never run `FLUSHALL` lightly — it affects all DBs. Prefer `FLUSHDB` (targeted DB) and always double-check your `REDIS_DB`.
+---
 
-## Persistence & Data Management
+## Persistence & Backups
+- AOF is enabled (`appendfsync everysec`) — safer than `no`, faster than `always`.
+- Optional snapshots provide an extra safety net.
+- Quick backup of the named volume:
+  ```bash
+  docker run --rm -v redisdata:/data -v "$PWD":/backup alpine \
+    sh -lc 'cd /data && tar czf /backup/redisdata.tgz .'
+  ```
+- Restore by stopping the stack, removing/recreating the volume, and untarring into `/data`.
 
-- **AOF** is enabled with `appendfsync everysec` — safer than `no`, faster than `always`.
-- Optional RDB snapshots are configured as additional safety nets.
-- To back up, snapshot the volume: `docker run --rm -v redisdata:/data -v "$PWD":/backup alpine sh -lc 'cd /data && tar czf /backup/redisdata.tgz .'`
-- To restore: stop container, remove volume, recreate volume, and untar into `/data`.
+---
 
 ## Troubleshooting
+- **UI loads but shows no keys** → Check that your app uses the same DB index; point UI with 5-field `REDIS_HOSTS` (see above).
+- **“Connection refused” from other containers** → They can’t resolve `dev-redis`. Use `172.17.0.1` or `host.docker.internal`.
+- **Port already in use** → Change `REDIS_PORT` or `UI_PORT` in `.env`.
+- **Password mismatch** → If you enabled `requirepass`, update both your apps and `REDIS_HOSTS` accordingly.
+- **Evictions** → Increase `maxmemory` or change `maxmemory-policy` in `server/redis.conf`.
 
-- **`PING` fails from a container**: Are you using `172.17.0.1` (or `host.docker.internal`) rather than `127.0.0.1`? Inside containers, `127.0.0.1` is the container itself.
-- **Bridge IP not `172.17.0.1`**: Run `ip route | grep docker0` to confirm. Use that IP.
-- **Port already in use**: change `REDIS_PORT` in `.env` and re-run `up -d`.
-- **Permission issues**: rare on Linux; the named volume avoids host FS perms. If you bind-mount a host dir, ensure it’s writable by Redis (UID/GID 999 on alpine images).
-- **Memory eviction**: If keys are evicted, raise `maxmemory` or change `maxmemory-policy`.
+---
 
 ## FAQ
+**Why not include Redis in every project’s compose?**  
+You can, but this creates duplication and overhead. One durable local Redis is simpler and reusable.
 
-**Why not include Redis in every project’s compose?**
-You *can*, but it’s redundant in dev. One durable Redis saves CPU/RAM and mental overhead.
+**Is this production-ready?**  
+The defaults are safe for dev (local-only bind, AOF on). For production, deploy Redis with HA, monitoring, and backups.
 
-**Is this production-ready?**
-It’s hardened for dev (AOF, local-only bind). For prod, deploy Redis per environment with proper monitoring, backups, and high availability.
+**How do I see keys?**  
+Use the Web UI at `http://localhost:8081`, or `docker exec -it dev-redis redis-cli`.
 
-**How do I see keys?**
-`docker exec -it dev-redis redis-cli KEYS '*' | head -n 50` (be careful — `KEYS` scans all keys; use `SCAN` in big DBs).
+**Can multiple apps share the same DB?**  
+Prefer separate DB indices and prefixes to avoid collisions.
 
-**Can multiple apps share the same DB?**
-Prefer not to. Use unique `REDIS_DB` and `REDIS_PREFIX` per app.
+---
 
 ## License
+MIT — do what you want, no warranty.
 
-MIT — do whatever you want; no warranty.

@@ -1,7 +1,11 @@
-# Named volume keeps data outside repo, but ignore temp files anyway
+# Environment file
+.env
+
+# Redis persistence artifacts (safety)
 *.rdb
 *.aof
 *.aof.*
 dump.rdb
-.env
+
+# vscode extensions
 .history
