@@ -4,3 +4,4 @@
 *.aof.*
 dump.rdb
 .env
+.history
