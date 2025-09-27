@@ -26,8 +26,8 @@ A production-grade **developer Redis** you can spin up once and reuse across man
    * [Host-native apps](#host-native-apps)
    * [Other containers (outside this compose)](#other-containers-outside-this-compose)
    * [Laravel `.env` Examples (Copy-Paste)](#laravel-env-examples-copy-paste)
-9. [Security & Hardening](#security--hardening)
-10. [Persistence & Backups](#persistence--backups)
+9. [Security &amp; Hardening](#security--hardening)
+10. [Persistence &amp; Backups](#persistence--backups)
 11. [Troubleshooting](#troubleshooting)
 12. [FAQ](#faq)
 13. [License](#license)
@@ -78,8 +78,14 @@ git clone https://github.com/EraysWorkbench/workbench-redis.git
 cd workbench-redis
 
 # 2) Review and CHANGE the default password before first run
-#   - .env → REDIS_PASSWORD=change_me_first
-#   - server/redis.conf → requirepass change_me_first (must match)
+#    Protected-mode is ON by default. To connect from the UI/container network,
+#    you MUST use a password (recommended) OR explicitly disable protected-mode.
+#    Recommended (default): keep protected-mode ON and set a strong password.
+#    - .env                 → REDIS_PASSWORD=change_me_first
+#    - server/redis.conf    → requirepass change_me_first  (must match)
+#    Alternative (dev quick, not recommended): no password + protected-mode OFF
+#    - server/redis.conf    → protected-mode no  (and comment out requirepass)
+#    - .env                 → use 4-field REDIS_HOSTS: REDIS_HOSTS=local:dev-redis:6379
 
 # 3) Build once
 docker compose build
