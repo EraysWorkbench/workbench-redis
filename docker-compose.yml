@@ -1,3 +1,15 @@
+# ---------------------------------------------------------------------------
+# Multi-project connectivity modes
+#   Mode A (DEFAULT): Shared external Docker network (workbench-net)
+#   Mode B: Open host port (0.0.0.0:${REDIS_PORT} → 6379)
+#   Mode C: Host-native app (localhost)
+# ---------------------------------------------------------------------------
+# How to switch:
+# - Mode A is enabled by default below (networks → workbench-net attached).
+# - Mode B: uncomment the "open-to-all-interfaces" ports mapping and recreate.
+# - Mode C: leave default localhost port mapping; host apps use 127.0.0.1:6379.
+# After changing a mode, run:  docker compose up -d --force-recreate
+
 name: workbench-redis
 
 services:
@@ -6,8 +18,16 @@ services:
       context: ./server
     image: workbench-redis:server
     container_name: dev-redis
+
+    # ------------------------
+    # PORT MAPPINGS (choose one)
+    # ------------------------
     ports:
+      # Mode C (host-native) & Mode A (default) keep localhost-only mapping
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # bind to localhost only
+      # Mode B (open to LAN) — uncomment the line below and comment the line above
+      # - "${REDIS_PORT:-6379}:6379"            # exposes to 0.0.0.0 (LAN)
+
     volumes:
       - redisdata:/data
       - ./server/redis.conf:/usr/local/etc/redis/redis.conf:ro
@@ -19,23 +39,29 @@ services:
       retries: 20
     restart: unless-stopped
 
+    # Mode A (DEFAULT): attach to shared bridge network so other projects can join
+    networks:
+      - workbench-net
+
   redis-ui:
     image: ghcr.io/joeferner/redis-commander:latest
     container_name: workbench-redis-ui
-    ports:
-      - "127.0.0.1:${UI_PORT:-8081}:8081"      # bind to localhost only
-    environment:
-      # Connect to Redis via the internal compose network (service name)
-      REDIS_HOSTS: "${REDIS_HOSTS:-local:dev-redis:6379}"
 
-      # Enable UI Basic Auth by setting both in .env (leave empty to disable):
+    # UI should stay localhost-only; you normally don't want LAN access here
+    ports:
+      - "127.0.0.1:${UI_PORT:-8081}:8081"
+
+    environment:
+      # Connect to Redis via internal compose network (service name)
+      # Default with no password in this file; prefer 5-field form when auth is on.
+      REDIS_HOSTS: "${REDIS_HOSTS:-local:dev-redis:6379}"
+      # If Redis auth is enabled, use the 5-field form (db + password):
+      # REDIS_HOSTS: "local:dev-redis:6379:0:${REDIS_PASSWORD}"
+
+      # Optional HTTP Basic Auth (enable both vars in .env to turn it on)
       HTTP_USER: "${HTTP_USER:-}"
       HTTP_PASSWORD: "${HTTP_PASSWORD:-}"
 
-      # If Redis auth is enabled, prefer the 5-field form:
-      # name:host:port[:db][:password]
-      # Example using the same password as in server/redis.conf:
-      # REDIS_HOSTS: "local:dev-redis:6379:0:${REDIS_PASSWORD}"
     depends_on:
       dev-redis:
         condition: service_healthy
@@ -46,5 +72,21 @@ services:
       retries: 20
     restart: unless-stopped
 
+    # Mode A (DEFAULT): attach to shared bridge network
+    networks:
+      - workbench-net
+
 volumes:
   redisdata:
+
+# ------------------------
+# NETWORKS
+# ------------------------
+# Mode A (DEFAULT): this compose creates a bridge network named workbench-net
+# Other projects should join it with: networks: { workbench-net: { external: true } }
+# After attaching your other project, set REDIS_HOST=dev-redis in that project.
+networks:
+  workbench-net:
+    name: workbench-net
+    driver: bridge
+    external: false
